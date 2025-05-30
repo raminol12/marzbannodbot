@@ -1,5 +1,5 @@
 import logging
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -21,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # States for conversation handler
-ADD_PANEL_DOMAIN, ADD_PANEL_PORT, ADD_PANEL_USERNAME, ADD_PANEL_PASSWORD, ADD_PANEL_HTTPS, CHOOSE_PANEL_FOR_NODE, ADD_NODE_IP, ADD_NODE_PORT, ADD_NODE_USER, ADD_NODE_PASSWORD, ADD_NODE_TO_PANEL_CONFIRM = range(11)
+ADD_PANEL_DOMAIN, ADD_PANEL_PORT, ADD_PANEL_USERNAME, ADD_PANEL_PASSWORD, ADD_PANEL_HTTPS, CHOOSE_PANEL_FOR_NODE, ADD_NODE_IP, ADD_NODE_PORT, ADD_NODE_USER, ADD_NODE_PASSWORD, ADD_NODE_TO_PANEL_CONFIRM, EDIT_PANEL_CHOICE, EDIT_PANEL_FIELD, EDIT_PANEL_NEW_VALUE, DELETE_NODE_PANEL_CHOICE, DELETE_NODE_CHOICE = range(16) # Added new states
 
 # File to store panel data
 PANEL_DATA_FILE = "marzban_panels.json"
@@ -41,36 +41,80 @@ def save_panel_data(data):
     with open(PANEL_DATA_FILE, 'w') as f:
         json.dump(data, f, indent=4)
 
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, message_text: str = "عملیات با موفقیت انجام شد. گزینه مورد نظر را انتخاب کنید:"):
+    """Displays the main menu with inline keyboard."""
+    keyboard = [
+        [InlineKeyboardButton("افزودن پنل جدید", callback_data='add_panel')],
+        [InlineKeyboardButton("افزودن نود جدید", callback_data='add_node')],
+        [InlineKeyboardButton("لیست پنل‌ها", callback_data='list_panels')],
+        # [InlineKeyboardButton("ویرایش پنل", callback_data='edit_panel_start')], # Placeholder for future
+        # [InlineKeyboardButton("حذف نود", callback_data='delete_node_start')], # Placeholder for future
+        [InlineKeyboardButton("لغو", callback_data='cancel_operation')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    if update.callback_query: # If called from a callback query, edit the message
+        await update.callback_query.edit_message_text(text=message_text, reply_markup=reply_markup)
+    else: # If called from a command, send a new message
+        await update.message.reply_text(message_text, reply_markup=reply_markup)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a welcome message when the /start command is issued."""
+    """Sends a welcome message when the /start command is issued and shows the main menu."""
     user = update.effective_user
     await update.message.reply_html(
         rf"سلام {user.mention_html()}! به ربات مدیریت نود مرزبان خوش آمدید.",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=ReplyKeyboardRemove(), # Remove any previous reply keyboard
     )
-    await update.message.reply_text(
-        "برای شروع، یکی از دستورات زیر را انتخاب کنید:\n"
-        "/add_panel - افزودن پنل مرزبان جدید\n"
-        "/add_node - افزودن نود به پنل موجود\n"
-        "/list_panels - نمایش پنل‌های ذخیره شده\n"
-        "/cancel - لغو عملیات فعلی"
-    )
+    await show_main_menu(update, context, "گزینه مورد نظر را انتخاب کنید:")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancels and ends the current conversation."""
-    user = update.message.from_user
+    """Cancels and ends the current conversation and shows the main menu."""
+    user = update.effective_user
     logger.info("User %s canceled the conversation.", user.first_name)
-    await update.message.reply_text(
-        "عملیات لغو شد.", reply_markup=ReplyKeyboardRemove()
-    )
+    
+    query = update.callback_query
+    if query:
+        await query.answer()
+        await query.edit_message_text(text="عملیات لغو شد.")
+    else:
+        await update.message.reply_text(
+            "عملیات لغو شد.", reply_markup=ReplyKeyboardRemove()
+        )
+    
+    # Show main menu after cancellation
+    # We need a way to send a new message if the original message for the menu was from a command
+    # For now, let's assume we always want to send a new message for the menu after cancel
+    # This might need adjustment based on how `show_main_menu` is called from `cancel`
+    # A simple way is to just call start again, or a dedicated function to show menu via new message
+    
+    # To avoid issues with context when cancelling from different states, 
+    # we send a new message for the main menu.
+    # A new update object is simulated for show_main_menu to send a new message.
+    class MockMessage:
+        async def reply_text(self, text, reply_markup):
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=text, reply_markup=reply_markup)
+    
+    class MockUpdate:
+        def __init__(self, effective_chat):
+            self.message = MockMessage()
+            self.callback_query = None # Ensure it sends a new message
+            self.effective_chat = effective_chat
+
+    mock_update = MockUpdate(update.effective_chat)
+    await show_main_menu(mock_update, context, "گزینه مورد نظر را انتخاب کنید:")
+
+    context.user_data.clear()
     return ConversationHandler.END
 
 # --- Add Panel Conversation --- #
-async def add_panel_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Starts the conversation to add a new Marzban panel."""
-    await update.message.reply_text(
-        "لطفاً دامنه یا IP پنل مرزبان خود را وارد کنید:"
-    )
+async def add_panel_start_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query:
+        await query.answer()
+        await query.edit_message_text(text="لطفاً دامنه یا IP پنل مرزبان خود را وارد کنید:")
+    else:
+        await update.message.reply_text(
+            "لطفاً دامنه یا IP پنل مرزبان خود را وارد کنید:"
+        )
     return ADD_PANEL_DOMAIN
 
 async def add_panel_domain(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -129,14 +173,23 @@ async def add_panel_https(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
     logger.info(f"Panel {panel_name} added by user {update.effective_user.id}")
     context.user_data.clear()
+    await show_main_menu(update, context) # Show main menu
     return ConversationHandler.END
 
 # --- List Panels --- #
-async def list_panels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Lists all saved Marzban panels."""
+async def list_panels_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query:
+        await query.answer()
+    
     panels = load_panel_data()
     if not panels:
-        await update.message.reply_text("هیچ پنل مرزبانی ذخیره نشده است. با /add_panel یک پنل اضافه کنید.")
+        message_text = "هیچ پنل مرزبانی ذخیره نشده است. با دکمه 'افزودن پنل جدید' یک پنل اضافه کنید."
+        if query:
+            await query.edit_message_text(text=message_text)
+        else:
+            await update.message.reply_text(message_text)
+        await show_main_menu(update, context, "گزینه مورد نظر را انتخاب کنید:") # Show main menu even if no panels
         return
 
     message = "پنل‌های ذخیره شده:\n"
@@ -144,7 +197,11 @@ async def list_panels(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         protocol = "HTTPS" if data.get('https', True) else "HTTP"
         message += f"- نام: {name} (پروتکل: {protocol})\n"
     
-    await update.message.reply_text(message)
+    if query:
+        await query.edit_message_text(text=message)
+    else:
+        await update.message.reply_text(message)
+    await show_main_menu(update, context, "گزینه مورد نظر را انتخاب کنید:") # Show main menu
 
 
 # --- Marzban API and SSH Logic (adapted from curlscript.py) --- #
@@ -215,13 +272,26 @@ async def execute_ssh_commands_on_node(node_details: dict, cert_info: str):
     """Connects to a node via SSH and executes setup commands."""
     commands = [
         'sudo ufw disable',
-        'curl -fsSL https://get.docker.com | sh',
-        '[ -d Marzban-node ] && sudo rm -rf Marzban-node', # Added sudo for rm -rf
-        'git clone https://github.com/Gozargah/Marzban-node',
-        'cd Marzban-node && docker compose up -d && docker compose down && sudo rm docker-compose.yml', # Added sudo for rm
+        'sudo apt-get update && sudo apt-get install -y curl git', # Ensure curl and git are installed
+        # Check if docker group exists, if not create it. Then add user to docker group.
+        # This might require a session restart for the group changes to take effect for non-sudo docker commands.
+        # However, we will continue to use sudo for docker commands to ensure they run.
+        f"getent group docker || sudo groupadd docker",
+        f"sudo usermod -aG docker {node_details['user']}", 
+        # The following command attempts to apply group changes immediately for the current session.
+        # This is shell-specific and might not work as expected in all environments or with paramiko.
+        # 'newgrp docker || true', # This command replaces the current shell, which can be problematic.
+                                 # It's safer to rely on sudo for docker commands throughout the script.
+
+        'curl -fsSL https://get.docker.com | sudo sh', # Ensure Docker is installed with sudo
+        # Ensure Marzban-node directory can be removed and re-cloned
+        'cd /tmp && sudo rm -rf Marzban-node', # Operate in /tmp to avoid permission issues in home dir, and ensure sudo for rm
+        'cd /tmp && git clone https://github.com/Gozargah/Marzban-node',
+        'cd /tmp/Marzban-node && sudo docker compose up -d && sudo docker compose down && sudo rm -f docker-compose.yml', # Ensure sudo for docker and rm
         # Ensure the directory exists and user has write permission, or use sudo tee
+        'sudo mkdir -p /var/lib/marzban-node', # Ensure directory exists
         f'echo "{cert_info}" | sudo tee /var/lib/marzban-node/ssl_client_cert.pem > /dev/null',
-        'cd Marzban-node && echo \'services:\n  marzban-node:\n    image: gozargah/marzban-node:latest\n    restart: always\n    network_mode: host\n    environment:\n      SSL_CERT_FILE: "/var/lib/marzban-node/ssl_cert.pem"\n      SSL_KEY_FILE: "/var/lib/marzban-node/ssl_key.pem"\n      SSL_CLIENT_CERT_FILE: "/var/lib/marzban-node/ssl_client_cert.pem"\n    volumes:\n      - /var/lib/marzban-node:/var/lib/marzban-node\' | sudo tee docker-compose.yml > /dev/null && sudo docker compose up -d'
+        'cd /tmp/Marzban-node && echo \'services:\n  marzban-node:\n    image: gozargah/marzban-node:latest\n    restart: always\n    network_mode: host\n    environment:\n      SSL_CERT_FILE: "/var/lib/marzban-node/ssl_cert.pem"\n      SSL_KEY_FILE: "/var/lib/marzban-node/ssl_key.pem"\n      SSL_CLIENT_CERT_FILE: "/var/lib/marzban-node/ssl_client_cert.pem"\n    volumes:\n      - /var/lib/marzban-node:/var/lib/marzban-node\' | sudo tee docker-compose.yml > /dev/null && sudo docker compose up -d'
     ]
 
     client = paramiko.SSHClient()
@@ -257,39 +327,57 @@ async def execute_ssh_commands_on_node(node_details: dict, cert_info: str):
         client.close()
 
 # --- Add Node Conversation --- # 
-async def add_node_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Starts the conversation to add a new node to a panel."""
+async def add_node_start_wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    if query:
+        await query.answer()
+
     panels = load_panel_data()
     if not panels:
-        await update.message.reply_text(
-            "ابتدا باید یک پنل مرزبان اضافه کنید. از دستور /add_panel استفاده کنید.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+        message_text = "ابتدا باید یک پنل مرزبان اضافه کنید. از دکمه 'افزودن پنل جدید' استفاده کنید."
+        if query:
+            await query.edit_message_text(text=message_text, reply_markup=None) # Remove keyboard if any
+        else:
+            await update.message.reply_text(message_text, reply_markup=ReplyKeyboardRemove())
+        await show_main_menu(update, context, "گزینه مورد نظر را انتخاب کنید:")
         return ConversationHandler.END
 
-    reply_keyboard = [[name] for name in panels.keys()]
-    await update.message.reply_text(
-        "لطفاً پنلی را که می‌خواهید نود به آن اضافه شود انتخاب کنید:",
-        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True),
-    )
+    # Using InlineKeyboardMarkup for panel selection
+    keyboard = [[InlineKeyboardButton(name, callback_data=f"select_panel_for_node_{name}")] for name in panels.keys()]
+    keyboard.append([InlineKeyboardButton("لغو", callback_data='cancel_operation')])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    message_text = "لطفاً پنلی را که می‌خواهید نود به آن اضافه شود انتخاب کنید:"
+    if query:
+        await query.edit_message_text(text=message_text, reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(message_text, reply_markup=reply_markup)
     return CHOOSE_PANEL_FOR_NODE
 
 async def choose_panel_for_node(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Stores the chosen panel and asks for node IP."""
-    chosen_panel_name = update.message.text
+    query = update.callback_query
+    await query.answer()
+    
+    chosen_panel_name = query.data.replace("select_panel_for_node_", "")
     panels = load_panel_data()
+
     if chosen_panel_name not in panels:
-        await update.message.reply_text(
-            "پنل انتخاب شده معتبر نیست. لطفاً دوباره تلاش کنید یا عملیات را لغو کنید.",
-            reply_markup=ReplyKeyboardRemove(),
+        await query.edit_message_text(
+            text="پنل انتخاب شده معتبر نیست. لطفاً دوباره تلاش کنید."
         )
-        # Potentially restart this step or end conversation
-        return CHOOSE_PANEL_FOR_NODE # Or ConversationHandler.END
+        # Go back to panel selection or show main menu
+        # For simplicity, let's reshow panel selection
+        keyboard = [[InlineKeyboardButton(name, callback_data=f"select_panel_for_node_{name}")] for name in panels.keys()]
+        keyboard.append([InlineKeyboardButton("لغو", callback_data='cancel_operation')])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.reply_text("لطفاً پنلی را که می‌خواهید نود به آن اضافه شود انتخاب کنید:", reply_markup=reply_markup)
+        return CHOOSE_PANEL_FOR_NODE
     
     context.user_data['chosen_panel'] = panels[chosen_panel_name]
     context.user_data['chosen_panel_name'] = chosen_panel_name
-    await update.message.reply_text(
-        f"شما پنل '{chosen_panel_name}' را انتخاب کردید.\n"
+    await query.edit_message_text(
+        text=f"شما پنل '{chosen_panel_name}' را انتخاب کردید.\n"
         "لطفاً IP سرور نود را وارد کنید:"
     )
     return ADD_NODE_IP
@@ -376,20 +464,20 @@ async def add_node_password(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data.clear()
     return ConversationHandler.END
 
+
+# --- Main Application Setup --- #
 def main() -> None:
-    """Start the bot."""
-    # Get the token from environment variable or replace with your bot token
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    """Start the bot.""" # Check if TELEGRAM_BOT_TOKEN is set
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not bot_token:
-        logger.error("TELEGRAM_BOT_TOKEN not found in environment variables.")
-        print("لطفاً توکن ربات تلگرام خود را در متغیر محیطی TELEGRAM_BOT_TOKEN قرار دهید.")
+        logger.error("متغیر محیطی TELEGRAM_BOT_TOKEN تنظیم نشده است!")
         return
 
     application = Application.builder().token(bot_token).build()
 
     # Conversation handler for adding a panel
     add_panel_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("add_panel", add_panel_start)],
+        entry_points=[CallbackQueryHandler(add_panel_start_wrapper, pattern='^add_panel$'), CommandHandler("add_panel", add_panel_start_wrapper)],
         states={
             ADD_PANEL_DOMAIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_panel_domain)],
             ADD_PANEL_PORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_panel_port)],
@@ -397,31 +485,47 @@ def main() -> None:
             ADD_PANEL_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_panel_password)],
             ADD_PANEL_HTTPS: [MessageHandler(filters.Regex('^(بله \(HTTPS\)|خیر \(HTTP\))$'), add_panel_https)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(cancel, pattern='^cancel_operation$')],
+        map_to_parent={
+            ConversationHandler.END: ConversationHandler.END # Propagate END to parent if nested
+        }
     )
-    
+
     # Conversation handler for adding a node
     add_node_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("add_node", add_node_start)],
+        entry_points=[CallbackQueryHandler(add_node_start_wrapper, pattern='^add_node$'), CommandHandler("add_node", add_node_start_wrapper)],
         states={
-            CHOOSE_PANEL_FOR_NODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_panel_for_node)],
+            CHOOSE_PANEL_FOR_NODE: [CallbackQueryHandler(choose_panel_for_node, pattern='^select_panel_for_node_.*$')],
             ADD_NODE_IP: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_node_ip)],
             ADD_NODE_PORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_node_port)],
             ADD_NODE_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_node_user)],
             ADD_NODE_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_node_password)],
-            # ADD_NODE_TO_PANEL_CONFIRM will be handled after actual logic is integrated
+            ADD_NODE_TO_PANEL_CONFIRM: [MessageHandler(filters.Regex('^(بله|خیر|yes|no)$'), add_node_to_panel_confirm)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("cancel", cancel), CallbackQueryHandler(cancel, pattern='^cancel_operation$')],
+        map_to_parent={
+            ConversationHandler.END: ConversationHandler.END
+        }
     )
+    
+    # Main conversation handler to manage top-level menu and sub-conversations
+    # This is a simplified approach. For complex menus, a different structure might be better.
+    # For now, we'll use individual handlers for commands/callbacks from the main menu.
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("cancel", cancel))
-    application.add_handler(CommandHandler("list_panels", list_panels))
+    application.add_handler(CommandHandler("help", start)) # Alias help to start
+    application.add_handler(CallbackQueryHandler(cancel, pattern='^cancel_operation$')) # General cancel from inline kbd
+
     application.add_handler(add_panel_conv_handler)
     application.add_handler(add_node_conv_handler)
+    application.add_handler(CallbackQueryHandler(list_panels_wrapper, pattern='^list_panels$'))
+    application.add_handler(CommandHandler("list_panels", list_panels_wrapper))
 
-    # Run the bot until the user presses Ctrl-C
-    logger.info("Bot started...")
+    # Fallback for unknown commands/callbacks if needed
+    # application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+    # application.add_handler(CallbackQueryHandler(unknown_callback))
+
+    logger.info("Bot started and polling...")
     application.run_polling()
 
 if __name__ == "__main__":
